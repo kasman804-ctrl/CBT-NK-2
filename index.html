@@ -2544,7 +2544,8 @@
                         { id: 'dashboard', label: 'Dashboard', icon: 'fas fa-tachometer-alt' },
                         { id: 'users', label: 'Pengguna', icon: 'fas fa-users' },
                         { id: 'classes', label: 'Kelas', icon: 'fas fa-school' },
-                        { id: 'subjects', label: 'Mapel', icon: 'fas fa-book' }
+                        { id: 'subjects', label: 'Mapel', icon: 'fas fa-book' },
+                        { id: 'settings', label: 'Pengaturan', icon: 'fas fa-cog' }
                     ];
                 } else if (AppState.currentUser.role === 'guru') {
                     navItems = [
@@ -2660,6 +2661,7 @@
                     case 'exam': this.showExamInterface(); break;
                     case 'student-results': this.showStudentResults(); break;
                     case 'student-grades': this.showStudentGrades(); break;
+                    case 'settings': this.showSettings(); break;
                     default: this.showDashboardHome();
                 }
             },
@@ -2747,6 +2749,70 @@
                         UI.showExamInterface();
                     });
                 }
+            },
+
+            async showSettings() {
+                const content = document.getElementById('dashboardContent');
+                content.innerHTML = `<div class="text-center p-8"><i class="fas fa-spinner fa-spin text-2xl text-blue-600"></i></div>`;
+
+                let currentDuration = 60; // Default duration in minutes
+                try {
+                    const settingsDoc = await db.collection('settings').doc('examConfig').get();
+                    if (settingsDoc.exists && settingsDoc.data().durationMinutes) {
+                        currentDuration = settingsDoc.data().durationMinutes;
+                    }
+                } catch (error) {
+                    console.error("Could not load exam settings:", error);
+                    UI.showNotification('Gagal memuat pengaturan. Menggunakan nilai default.', 'error');
+                }
+
+                content.innerHTML = `
+                    <div class="fade-in">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-6">Pengaturan Ujian</h2>
+                        <div class="max-w-lg mx-auto bg-white rounded-lg shadow p-8">
+                            <form id="settingsForm">
+                                <div class="mb-6">
+                                    <label for="examDuration" class="block text-lg font-medium text-gray-700 mb-2">Durasi Waktu Ujian (menit)</label>
+                                    <p class="text-sm text-gray-500 mb-3">Atur berapa lama waktu yang dimiliki siswa untuk menyelesaikan ujian.</p>
+                                    <input type="number" id="examDuration" name="examDuration" min="1" required
+                                           class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                           value="${currentDuration}">
+                                </div>
+                                <div class="flex justify-end">
+                                    <button type="submit" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition duration-200 font-semibold">
+                                        <i class="fas fa-save mr-2"></i>Simpan Pengaturan
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const newDuration = parseInt(document.getElementById('examDuration').value);
+                    if (isNaN(newDuration) || newDuration <= 0) {
+                        UI.showNotification('Masukkan durasi yang valid.', 'error');
+                        return;
+                    }
+
+                    const submitButton = e.target.querySelector('button[type="submit"]');
+                    submitButton.disabled = true;
+                    submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Menyimpan...';
+
+                    try {
+                        await db.collection('settings').doc('examConfig').set({
+                            durationMinutes: newDuration
+                        });
+                        UI.showNotification('Pengaturan durasi ujian berhasil disimpan!', 'success');
+                    } catch (error) {
+                        console.error("Error saving settings:", error);
+                        UI.showNotification('Gagal menyimpan pengaturan!', 'error');
+                    } finally {
+                        submitButton.disabled = false;
+                        submitButton.innerHTML = '<i class="fas fa-save mr-2"></i>Simpan Pengaturan';
+                    }
+                });
             },
 
             showUserManagement() {
@@ -3239,7 +3305,18 @@
                     AppState.selectedExamCode = examCode;
                     AppState.currentQuestion = 0;
                     AppState.examAnswers = {};
-                    AppState.examTimeLeft = 3600;
+                    
+                    try {
+                        const settingsDoc = await db.collection('settings').doc('examConfig').get();
+                        if (settingsDoc.exists && settingsDoc.data().durationMinutes) {
+                            AppState.examTimeLeft = parseInt(settingsDoc.data().durationMinutes) * 60;
+                        } else {
+                            AppState.examTimeLeft = 3600; // Fallback to 60 minutes
+                        }
+                    } catch (error) {
+                        console.error("Error fetching exam settings, using default time.", error);
+                        AppState.examTimeLeft = 3600;
+                    }
                     
                     this.renderQuestion();
                     this.setupQuestionNavigation();
