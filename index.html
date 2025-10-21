@@ -725,10 +725,43 @@
                     try {
                         await db.collection('blockedStudents').doc(docId).delete();
                         UI.showNotification('Blokir siswa berhasil dibuka!', 'success');
-                        UI.showSettings(); // Refresh the view
+                        UI.renderBlockedStudents(); // Refresh just the list
                     } catch (error) {
                         console.error("Error unblocking student: ", error);
                         UI.showNotification('Gagal membuka blokir siswa!', 'error');
+                    }
+                });
+            },
+
+            unblockAllStudents() {
+                UI.showConfirmModal('Konfirmasi Buka Semua Blokir', 'Anda yakin ingin membuka blokir untuk SEMUA siswa? Tindakan ini tidak dapat dibatalkan.', async () => {
+                    Swal.fire({
+                        title: 'Memproses...',
+                        text: 'Sedang membuka semua blokir siswa.',
+                        allowOutsideClick: false,
+                        didOpen: () => { Swal.showLoading(); }
+                    });
+                    try {
+                        const snapshot = await db.collection('blockedStudents').get();
+                        if (snapshot.empty) {
+                            Swal.close();
+                            UI.showNotification('Tidak ada siswa yang terblokir.', 'info');
+                            return;
+                        }
+
+                        const batch = db.batch();
+                        snapshot.docs.forEach(doc => {
+                            batch.delete(doc.ref);
+                        });
+
+                        await batch.commit();
+                        Swal.close();
+                        UI.showNotification('Semua blokir siswa berhasil dibuka!', 'success');
+                        UI.renderBlockedStudents(); // Refresh the view
+                    } catch (error) {
+                        Swal.close();
+                        console.error("Error unblocking all students: ", error);
+                        UI.showNotification('Gagal membuka semua blokir siswa!', 'error');
                     }
                 });
             },
@@ -2768,7 +2801,12 @@
                 if (!section) return;
 
                 section.innerHTML = `
-                    <h3 class="text-xl font-bold text-gray-900 mb-4">Manajemen Siswa Terblokir</h3>
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-xl font-bold text-gray-900">Manajemen Siswa Terblokir</h3>
+                        <button id="unblockAllBtn" class="hidden bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 transition duration-200 text-sm font-semibold">
+                            <i class="fas fa-unlock-alt mr-2"></i>Buka Semua Blokir
+                        </button>
+                    </div>
                     <div class="bg-white rounded-lg shadow overflow-hidden">
                         <div class="overflow-x-auto">
                             <table class="min-w-full divide-y divide-gray-200">
@@ -2793,9 +2831,17 @@
                 const tableBody = document.getElementById('blockedStudentsTableBody');
                 try {
                     const snapshot = await db.collection('blockedStudents').orderBy('blockedAt', 'desc').get();
+                    const unblockAllBtn = document.getElementById('unblockAllBtn');
+
                     if (snapshot.empty) {
                         tableBody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-gray-500">Tidak ada siswa yang terblokir saat ini.</td></tr>';
+                        if (unblockAllBtn) unblockAllBtn.classList.add('hidden');
                         return;
+                    }
+
+                    if (unblockAllBtn) {
+                        unblockAllBtn.classList.remove('hidden');
+                        unblockAllBtn.onclick = () => Management.unblockAllStudents();
                     }
 
                     const blockedList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
