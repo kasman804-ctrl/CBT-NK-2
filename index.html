@@ -3704,7 +3704,7 @@
                 violationCount++;
                 sessionStorage.setItem(violationKey, violationCount.toString());
 
-                if (violationCount > 3) {
+                if (violationCount >= 3) {
                     if (AppState.examTimer) clearInterval(AppState.examTimer);
                     document.removeEventListener('visibilitychange', UI.handleVisibilityChange);
                     document.removeEventListener('fullscreenchange', UI.handleFullscreenChange);
