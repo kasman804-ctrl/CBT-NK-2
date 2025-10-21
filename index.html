@@ -404,68 +404,6 @@
         }
 
         // =================================================================
-        // EXAM SECURITY SYSTEM
-        // =================================================================
-        const ExamSecurity = {
-            getAttemptsKey: (username, examCode) => `cbtAttempts_${username}_${examCode}`,
-            getBlockTimestampKey: (username, examCode) => `cbtBlock_${username}_${examCode}`,
-
-            getAttempts: function(username, examCode) {
-                return parseInt(localStorage.getItem(this.getAttemptsKey(username, examCode)) || '0');
-            },
-
-            incrementAttempts: function(username, examCode) {
-                let attempts = this.getAttempts(username, examCode);
-                attempts++;
-                localStorage.setItem(this.getAttemptsKey(username, examCode), attempts.toString());
-                return attempts;
-            },
-
-            clearAttempts: function(username, examCode) {
-                localStorage.removeItem(this.getAttemptsKey(username, examCode));
-                localStorage.removeItem(this.getBlockTimestampKey(username, examCode));
-            },
-
-            block: function(username, examCode) {
-                const now = Date.now();
-                localStorage.setItem(this.getBlockTimestampKey(username, examCode), now.toString());
-            },
-
-            isBlocked: function(username, examCode) {
-                const blockTimestamp = localStorage.getItem(this.getBlockTimestampKey(username, examCode));
-                if (!blockTimestamp) return false;
-
-                const oneHour = 60 * 60 * 1000;
-                const timeSinceBlock = Date.now() - parseInt(blockTimestamp);
-
-                if (timeSinceBlock < oneHour) {
-                    return true;
-                } else {
-                    // Block expired, clear it
-                    this.clearAttempts(username, examCode);
-                    return false;
-                }
-            },
-
-            getBlockTimeRemaining: function(username, examCode) {
-                const blockTimestamp = localStorage.getItem(this.getBlockTimestampKey(username, examCode));
-                if (!blockTimestamp) return '0 detik';
-
-                const oneHour = 60 * 60 * 1000;
-                const blockEndTime = parseInt(blockTimestamp) + oneHour;
-                const remainingMs = blockEndTime - Date.now();
-
-                if (remainingMs <= 0) return '0 detik';
-
-                const minutes = Math.floor(remainingMs / 60000);
-                const seconds = Math.floor((remainingMs % 60000) / 1000);
-
-                return `${minutes} menit ${seconds} detik`;
-            },
-        };
-
-
-        // =================================================================
         // MANAGEMENT SYSTEM (with Firebase & Google Sheets Integration)
         // =================================================================
         const Management = {
@@ -779,6 +717,19 @@
                     AppState.subjects = AppState.subjects.filter(s => s.id != id);
                     UI.showSubjectManagement();
                     UI.showNotification('Mata pelajaran berhasil dihapus!', 'success');
+                });
+            },
+
+            unblockStudent(docId) {
+                UI.showConfirmModal('Konfirmasi Buka Blokir', 'Anda yakin ingin membuka blokir siswa ini?', async () => {
+                    try {
+                        await db.collection('blockedStudents').doc(docId).delete();
+                        UI.showNotification('Blokir siswa berhasil dibuka!', 'success');
+                        UI.showSettings(); // Refresh the view
+                    } catch (error) {
+                        console.error("Error unblocking student: ", error);
+                        UI.showNotification('Gagal membuka blokir siswa!', 'error');
+                    }
                 });
             },
 
@@ -2708,10 +2659,12 @@
                             return;
                         }
 
-                        // Security Check: Is student blocked?
-                        if (ExamSecurity.isBlocked(studentUsername, examCode)) {
-                            const remainingTime = ExamSecurity.getBlockTimeRemaining(studentUsername, examCode);
-                            errorDiv.innerHTML = `Akses Anda ke soal ini diblokir karena telah mencoba 3 kali.<br>Coba lagi dalam: <strong>${remainingTime}</strong>`;
+                        // Security Check: Is student blocked in Firestore?
+                        const blockDocRef = db.collection('blockedStudents').doc(`${studentUsername}_${examCode}`);
+                        const blockDoc = await blockDocRef.get();
+
+                        if (blockDoc.exists) {
+                            errorDiv.textContent = 'Akses Anda ke soal ini diblokir. Hubungi admin untuk membuka blokir.';
                             errorDiv.classList.remove('hidden');
                             return;
                         }
@@ -2731,15 +2684,6 @@
 
                         if (studentGrade !== examGrade) {
                             errorDiv.textContent = 'Anda tidak diizinkan mengerjakan soal untuk kelas ini.';
-                            errorDiv.classList.remove('hidden');
-                            return;
-                        }
-
-                        // Security Check: Increment attempts and check if it reaches the limit
-                        const attempts = ExamSecurity.incrementAttempts(studentUsername, examCode);
-                        if (attempts >= 4) {
-                            ExamSecurity.block(studentUsername, examCode);
-                            errorDiv.innerHTML = `Anda telah mencoba 4 kali. Akses ke soal ini diblokir selama 1 jam.`;
                             errorDiv.classList.remove('hidden');
                             return;
                         }
@@ -2785,6 +2729,7 @@
                                 </div>
                             </form>
                         </div>
+                        <div id="blockedStudentsSection" class="mt-12"></div>
                     </div>
                 `;
 
@@ -2813,7 +2758,73 @@
                         submitButton.innerHTML = '<i class="fas fa-save mr-2"></i>Simpan Pengaturan';
                     }
                 });
+
+                // Load and render blocked students
+                this.renderBlockedStudents();
             },
+
+            async renderBlockedStudents() {
+                const section = document.getElementById('blockedStudentsSection');
+                if (!section) return;
+
+                section.innerHTML = `
+                    <h3 class="text-xl font-bold text-gray-900 mb-4">Manajemen Siswa Terblokir</h3>
+                    <div class="bg-white rounded-lg shadow overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">No.</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama Lengkap</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kode Soal</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Waktu Diblokir</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="blockedStudentsTableBody" class="bg-white divide-y divide-gray-200">
+                                    <tr><td colspan="6" class="p-4 text-center text-gray-500"><i class="fas fa-spinner fa-spin mr-2"></i>Memuat data...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+
+                const tableBody = document.getElementById('blockedStudentsTableBody');
+                try {
+                    const snapshot = await db.collection('blockedStudents').orderBy('blockedAt', 'desc').get();
+                    if (snapshot.empty) {
+                        tableBody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-gray-500">Tidak ada siswa yang terblokir saat ini.</td></tr>';
+                        return;
+                    }
+
+                    const blockedList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    
+                    tableBody.innerHTML = blockedList.map((blocked, index) => {
+                        const user = AppState.users.find(u => u.username === blocked.username);
+                        const studentName = user ? user.nama : 'N/A';
+                        const blockedAtDate = blocked.blockedAt ? blocked.blockedAt.toDate().toLocaleString('id-ID') : 'N/A';
+                        return `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${index + 1}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${blocked.username}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${studentName}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${blocked.examCode}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${blockedAtDate}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <button onclick="Management.unblockStudent('${blocked.id}')" class="bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 text-xs">
+                                        <i class="fas fa-unlock-alt mr-1"></i> Buka Blokir
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('');
+                } catch (error) {
+                    console.error("Error fetching blocked students:", error);
+                    tableBody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-red-500">Gagal memuat data siswa terblokir.</td></tr>';
+                }
+            },
+
 
             showUserManagement() {
                 const content = document.getElementById('dashboardContent');
@@ -3498,7 +3509,6 @@
                         waktuSelesai: new Date().toLocaleString('id-ID')
                     });
 
-                    ExamSecurity.clearAttempts(AppState.currentUser.username, AppState.selectedExamCode);
                     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
                     window.removeEventListener('resize', this.handleResize);
 
@@ -3587,56 +3597,73 @@
                 updateStudentOptions(); // Initial population
             },
 
-            handleVisibilityChange() {
+            async handleVisibilityChange() {
                 if (document.hidden && AppState.currentView === 'exam') {
-                    // Stop the timer immediately
                     if (AppState.examTimer) clearInterval(AppState.examTimer);
-                    
-                    // Remove the listener to prevent multiple triggers
                     document.removeEventListener('visibilitychange', UI.handleVisibilityChange);
                     window.removeEventListener('resize', UI.handleResize);
-                    
-                    // Forcefully end the exam session and go back to the dashboard
+
                     Swal.fire({
                         title: 'Sesi Ujian Dihentikan!',
-                        text: 'Anda meninggalkan halaman ujian. Sesi Anda telah dihentikan dan percobaan Anda telah dicatat.',
+                        text: 'Anda meninggalkan halaman ujian. Sesi Anda telah dihentikan dan akses Anda ke ujian ini diblokir. Hubungi admin untuk informasi lebih lanjut.',
                         icon: 'warning',
                         confirmButtonText: 'OK',
                         allowOutsideClick: false
-                    }).then(() => {
-                        AppState.currentView = 'dashboard'; // prevent resubmission
+                    }).then(async () => {
+                        try {
+                            const { username } = AppState.currentUser;
+                            const { selectedExamCode } = AppState;
+                            await db.collection('blockedStudents').doc(`${username}_${selectedExamCode}`).set({
+                                username,
+                                examCode: selectedExamCode,
+                                blockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                                reason: 'Meninggalkan halaman ujian'
+                            });
+                        } catch (error) {
+                            console.error("Gagal menyimpan data blokir:", error);
+                        }
+                        AppState.currentView = 'dashboard';
                         UI.showDashboard();
                     });
                 }
             },
             
-            handleResize() {
+            async handleResize() {
                 if (AppState.currentView === 'exam') {
-                    // A small delay to avoid false positives from temporary resizes like scrollbar appearing
-                    setTimeout(() => {
-                        if (AppState.currentView !== 'exam') return; // Check again in case exam was already terminated
-
+                    setTimeout(async () => {
+                        if (AppState.currentView !== 'exam') return;
                         const currentWidth = window.innerWidth;
                         const currentHeight = window.innerHeight;
 
                         if (currentWidth !== AppState.examInitialWidth || currentHeight !== AppState.examInitialHeight) {
                             if (AppState.examTimer) clearInterval(AppState.examTimer);
-                            
                             document.removeEventListener('visibilitychange', UI.handleVisibilityChange);
                             window.removeEventListener('resize', UI.handleResize);
                             
                             Swal.fire({
                                 title: 'Sesi Ujian Dihentikan!',
-                                text: 'Ukuran jendela browser telah berubah. Untuk menjaga integritas ujian, sesi Anda dihentikan.',
+                                text: 'Ukuran jendela browser berubah. Sesi Anda telah dihentikan dan akses Anda ke ujian ini diblokir. Hubungi admin untuk informasi lebih lanjut.',
                                 icon: 'warning',
                                 confirmButtonText: 'OK',
                                 allowOutsideClick: false
-                            }).then(() => {
-                                AppState.currentView = 'dashboard'; // prevent resubmission
+                            }).then(async () => {
+                                try {
+                                    const { username } = AppState.currentUser;
+                                    const { selectedExamCode } = AppState;
+                                    await db.collection('blockedStudents').doc(`${username}_${selectedExamCode}`).set({
+                                        username,
+                                        examCode: selectedExamCode,
+                                        blockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                                        reason: 'Ukuran jendela browser diubah'
+                                    });
+                                } catch (error) {
+                                    console.error("Gagal menyimpan data blokir:", error);
+                                }
+                                AppState.currentView = 'dashboard';
                                 UI.showDashboard();
                             });
                         }
-                    }, 100); // 100ms delay
+                    }, 100);
                 }
             },
 
