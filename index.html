@@ -293,8 +293,6 @@
             examAnswers: {},
             examTimer: null,
             examTimeLeft: 3600, // 60 minutes in seconds
-            examInitialWidth: 0,
-            examInitialHeight: 0,
             questions: [], // This will be populated from Firestore for the current exam
             currentView: 'login',
             selectedExamCode: null,
@@ -2430,8 +2428,6 @@
         // =================================================================
         // UI MANAGEMENT
         // =================================================================
-        let resizeTimeout; // For debouncing resize event
-
         const UI = {
             toBase64: file => new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -3433,9 +3429,6 @@
                     // Security: Add listeners
                     document.addEventListener('visibilitychange', this.handleVisibilityChange);
                     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
-                    AppState.examInitialWidth = window.innerWidth;
-                    AppState.examInitialHeight = window.innerHeight;
-                    window.addEventListener('resize', this.handleResize);
 
                     return true;
                 } catch (error) {
@@ -3535,7 +3528,6 @@
                 // Remove security listeners before showing confirmation
                 document.removeEventListener('visibilitychange', this.handleVisibilityChange);
                 document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
-                window.removeEventListener('resize', this.handleResize);
 
                 Swal.fire({
                     title: 'Sedang Memproses Jawaban...',
@@ -3708,7 +3700,6 @@
                     if (AppState.examTimer) clearInterval(AppState.examTimer);
                     document.removeEventListener('visibilitychange', UI.handleVisibilityChange);
                     document.removeEventListener('fullscreenchange', UI.handleFullscreenChange);
-                    window.removeEventListener('resize', UI.handleResize);
 
                     Swal.fire({
                         title: 'Sesi Ujian Dihentikan!',
@@ -3755,24 +3746,6 @@
                 }
             },
             
-            handleResize() {
-                if (AppState.currentView === 'exam') {
-                    clearTimeout(resizeTimeout);
-                    resizeTimeout = setTimeout(() => {
-                        if (AppState.currentView !== 'exam') return;
-
-                        const currentWidth = window.innerWidth;
-                        const currentHeight = window.innerHeight;
-
-                        if (Math.abs(currentWidth - AppState.examInitialWidth) > 1 || Math.abs(currentHeight - AppState.examInitialHeight) > 1) {
-                            AppState.examInitialWidth = currentWidth;
-                            AppState.examInitialHeight = currentHeight;
-                            UI.handleViolation('mengubah ukuran jendela', 'Resize');
-                        }
-                    }, 500);
-                }
-            },
-
             toggleAnswerFields(type, formId) {
                 const form = document.getElementById(formId);
                 const pilihanField = form.querySelector('#pilihanField');
