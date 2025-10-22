@@ -186,10 +186,22 @@
             <ul class="text-sm text-left text-gray-600 list-disc list-inside mb-8 space-y-2 p-4 bg-gray-50 rounded-lg">
                 <li>Pastikan tidak ada aplikasi atau jendela lain yang terbuka.</li>
                 <li>Dilarang meninggalkan halaman ujian atau keluar dari mode layar penuh.</li>
-                <li>Setiap pelanggaran akan dicatat. Setelah <strong>3 kali pelanggaran</strong>, sesi ujian Anda akan dihentikan secara otomatis.</li>
             </ul>
             <button id="startFullscreenExamBtn" class="w-full px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition duration-200 text-lg">
                 <i class="fas fa-play-circle mr-2"></i> Saya Mengerti & Mulai Ujian
+            </button>
+        </div>
+    </div>
+
+    <!-- Re-enter Fullscreen Modal -->
+    <div id="reEnterFullscreenModal" class="fixed inset-0 bg-gray-900 bg-opacity-95 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-2xl w-full max-w-lg p-8 text-center fade-in">
+            <i class="fas fa-expand text-5xl text-blue-600 mb-6"></i>
+            <h3 class="text-2xl font-bold text-gray-900 mb-4">Ujian Dijeda</h3>
+            <p class="text-gray-700 mb-6">Anda harus berada dalam mode layar penuh untuk melanjutkan ujian.</p>
+            <p id="violationWarning" class="text-red-500 font-bold mb-6"></p>
+            <button id="reEnterFullscreenBtn" class="w-full px-6 py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition duration-200 text-lg">
+                <i class="fas fa-expand-arrows-alt mr-2"></i> Masuk Layar Penuh Kembali
             </button>
         </div>
     </div>
@@ -296,6 +308,7 @@
             questions: [], // This will be populated from Firestore for the current exam
             currentView: 'login',
             selectedExamCode: null,
+            fullscreenViolations: 0,
             lastQuestionData: { semester: '', tahunAjaran: '' }, // To store last used question data for teacher
             filters: {
                 questions: { kelas: '', mataPelajaran: '', kode: '' },
@@ -3367,7 +3380,6 @@
 
             async initializeExam(examCode) {
                 if (!examCode) return false;
-                sessionStorage.setItem(`violationCount_${examCode}`, '0');
 
                 try {
                     // Firebase Integration: Get questions from Firestore
@@ -3408,6 +3420,7 @@
                     AppState.selectedExamCode = examCode;
                     AppState.currentQuestion = 0;
                     AppState.examAnswers = {};
+                    AppState.fullscreenViolations = 0; // Reset violations
                     
                     try {
                         const settingsDoc = await db.collection('settings').doc('examConfig').get();
@@ -3427,7 +3440,6 @@
                     this.updateProgress();
 
                     // Security: Add listeners
-                    document.addEventListener('visibilitychange', this.handleVisibilityChange);
                     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
 
                     return true;
@@ -3526,7 +3538,6 @@
                 if (AppState.examTimer) clearInterval(AppState.examTimer);
 
                 // Remove security listeners before showing confirmation
-                document.removeEventListener('visibilitychange', this.handleVisibilityChange);
                 document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
 
                 Swal.fire({
@@ -3688,61 +3699,58 @@
                 updateStudentOptions(); // Initial population
             },
             
-            async handleViolation(reasonText, reasonForBlock) {
-                 if (AppState.currentView !== 'exam') return;
+            async blockStudentAndExit() {
+                // Remove listeners to prevent loops
+                document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+                if (AppState.examTimer) clearInterval(AppState.examTimer);
 
-                const violationKey = `violationCount_${AppState.selectedExamCode}`;
-                let violationCount = parseInt(sessionStorage.getItem(violationKey) || '0');
-                violationCount++;
-                sessionStorage.setItem(violationKey, violationCount.toString());
+                // Record the block in Firestore
+                const docId = `${AppState.currentUser.username}_${AppState.selectedExamCode}`;
+                await db.collection('blockedStudents').doc(docId).set({
+                    username: AppState.currentUser.username,
+                    examCode: AppState.selectedExamCode,
+                    blockedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
 
-                if (violationCount >= 3) {
-                    if (AppState.examTimer) clearInterval(AppState.examTimer);
-                    document.removeEventListener('visibilitychange', UI.handleVisibilityChange);
-                    document.removeEventListener('fullscreenchange', UI.handleFullscreenChange);
-
-                    Swal.fire({
-                        title: 'Sesi Ujian Dihentikan!',
-                        text: 'Anda telah melakukan pelanggaran berulang kali. Sesi Anda telah dihentikan dan akses Anda diblokir.',
-                        icon: 'error',
-                        confirmButtonText: 'OK',
-                        allowOutsideClick: false
-                    }).then(async () => {
-                        try {
-                            const { username } = AppState.currentUser;
-                            const { selectedExamCode } = AppState;
-                            await db.collection('blockedStudents').doc(`${username}_${selectedExamCode}`).set({
-                                username,
-                                examCode: selectedExamCode,
-                                blockedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                                reason: `${reasonForBlock} (pelanggaran berulang)`
-                            });
-                        } catch (error) {
-                            console.error("Gagal menyimpan data blokir:", error);
-                        }
-                        Auth.logout();
-                    });
-                } else {
-                    const chancesLeft = 3 - violationCount;
-                    Swal.fire({
-                        title: 'Peringatan Pelanggaran!',
-                        html: `Anda terdeteksi <b>${reasonText}</b>. Ini adalah pelanggaran ke-<b>${violationCount}</b> dari 3.<br>Anda memiliki <b>${chancesLeft}</b> kesempatan lagi sebelum sesi Anda diblokir secara permanen.`,
-                        icon: 'warning',
-                        confirmButtonText: 'Saya Mengerti',
-                        allowOutsideClick: false
-                    });
-                }
-            },
-
-            handleVisibilityChange() {
-                if (document.hidden) {
-                    UI.handleViolation('meninggalkan halaman ujian', 'Tab Switch');
-                }
+                // Show final message and log out
+                Swal.fire({
+                    title: 'Anda Diblokir!',
+                    html: `Anda telah keluar dari mode layar penuh sebanyak 3 kali.<br>Akses Anda ke ujian ini telah diblokir. Silakan hubungi admin.`,
+                    icon: 'error',
+                    confirmButtonText: 'OK',
+                    allowOutsideClick: false
+                }).then(() => {
+                    Auth.logout();
+                });
             },
 
             handleFullscreenChange() {
-                 if (!document.fullscreenElement && AppState.currentView === 'exam') {
-                    UI.handleViolation('keluar dari mode layar penuh', 'Fullscreen Exit');
+                if (AppState.currentView !== 'exam') return;
+
+                const reEnterModal = document.getElementById('reEnterFullscreenModal');
+                const warningText = document.getElementById('violationWarning');
+
+                if (!document.fullscreenElement) {
+                    // Exited fullscreen
+                    if (AppState.examTimer) {
+                        clearInterval(AppState.examTimer);
+                        AppState.examTimer = null;
+                    }
+                    
+                    AppState.fullscreenViolations++;
+
+                    if (AppState.fullscreenViolations >= 3) {
+                        UI.blockStudentAndExit();
+                    } else {
+                        warningText.textContent = `Peringatan: Anda telah keluar dari mode layar penuh ${AppState.fullscreenViolations} kali. Anda akan diblokir setelah 3 kali pelanggaran.`;
+                        reEnterModal.classList.remove('hidden');
+                    }
+                } else {
+                    // Re-entered fullscreen
+                    reEnterModal.classList.add('hidden');
+                    if (!AppState.examTimer && AppState.examTimeLeft > 0) {
+                        UI.startTimer();
+                    }
                 }
             },
             
@@ -4047,6 +4055,14 @@
             if(geminiModal) {
                 geminiModal.addEventListener('click', (e) => { if (e.target === e.currentTarget) UI.hideGeminiModal(); });
             }
+            
+            document.getElementById('reEnterFullscreenBtn').addEventListener('click', async () => {
+                try {
+                    await document.documentElement.requestFullscreen();
+                } catch (err) {
+                    UI.showNotification('Gagal masuk mode layar penuh. Silakan klik lagi.', 'error');
+                }
+            });
 
             document.getElementById('confirmCancelBtn').addEventListener('click', () => document.getElementById('confirmModal').classList.add('hidden'));
 
